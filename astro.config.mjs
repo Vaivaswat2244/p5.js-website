@@ -18,6 +18,10 @@ if (shouldSkipCompress) {
 
 const isA11yTest = Boolean(process.env.A11Y_TEST);
 
+// PoC (p5.js#9303): reference-only preview build — skip the service worker,
+// which globs and precaches the whole dist output.
+const isReferenceOnly = Boolean(process.env.REFERENCE_ONLY);
+
 // https://astro.build/config
 export default defineConfig({
   site: 'https://p5js.org',
@@ -32,27 +36,31 @@ export default defineConfig({
     }),
     mdx(),
     fast(),
-    serviceWorker({
-      workbox: {
-        globPatterns: [
-          "**/*.{css,js,jpg,json,png,svg,ico,woff,woff2}", // Cache all assets accept HTML
-        ],
-        clientsClaim: true,
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.pathname.endsWith(".html"), // Caches HTML pages
-            handler: "CacheFirst", // Tries the cache first, then falls back to network if offline
-            options: {
-              cacheName: "html-pages-cache",
-              expiration: {
-                maxEntries: 50, // Limits the number of HTML pages cached
-                maxAgeSeconds: 24 * 60 * 60 * 7, // Cache for 1 week
-              },
+    ...(isReferenceOnly
+      ? []
+      : [
+          serviceWorker({
+            workbox: {
+              globPatterns: [
+                "**/*.{css,js,jpg,json,png,svg,ico,woff,woff2}", // Cache all assets accept HTML
+              ],
+              clientsClaim: true,
+              runtimeCaching: [
+                {
+                  urlPattern: ({ url }) => url.pathname.endsWith(".html"), // Caches HTML pages
+                  handler: "CacheFirst", // Tries the cache first, then falls back to network if offline
+                  options: {
+                    cacheName: "html-pages-cache",
+                    expiration: {
+                      maxEntries: 50, // Limits the number of HTML pages cached
+                      maxAgeSeconds: 24 * 60 * 60 * 7, // Cache for 1 week
+                    },
+                  },
+                },
+              ],
             },
-          },
-        ],
-      },
-    }),
+          }),
+        ]),
   ],
   prefetch: {
     defaultStrategy: "viewport",
@@ -61,7 +69,9 @@ export default defineConfig({
   trailingSlash: "always",
   build: {
     format: "directory",
-    concurrency: 2
+    // PoC (p5.js#9303): page-render concurrency, overridable for preview-build
+    // experiments. Defaults to the repo's existing value of 2.
+    concurrency: Number(process.env.ASTRO_BUILD_CONCURRENCY) || 2
   },
   server: {
     watch: {

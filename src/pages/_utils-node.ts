@@ -1,5 +1,5 @@
-import { readFile, access } from "fs/promises";
-import { constants } from "fs";
+import { readFile, access } from "node:fs/promises";
+import { constants } from "node:fs";
 
 // THIS FILE OF UTILS IS FOR CODE THAT NEEDS NODEJS RUNTIME DEPS
 // IT CANNOT BE IMPORTED INTO A COMPONENT THAT RENDERS ON THE CLIENT
