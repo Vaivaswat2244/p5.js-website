@@ -140,3 +140,76 @@ hardware than this laptop should land well under the ~9 minutes measured here.
 - `.poc/dist-full-baseline/` (502 MB), `dist/` (reference-only, 224 MB),
   `.poc/dist-refonly-nolower/` (187 MB) — delete when done
 - `.poc/baseline-pages.txt` — full-page inventory of the baseline build
+
+## Follow-up
+
+### Build concurrency sweep (laptop, 8 threads / 7.4 GB RAM)
+
+`astro.config.mjs` now reads `ASTRO_BUILD_CONCURRENCY` (default stays 2).
+Reference-only build, `REFERENCE_SKIP_LOWERCASE=1`, `SKIP_BUILD_COMPRESS=1`,
+4 GB heap, measured with `/usr/bin/time -v`:
+
+| concurrency | wall time | peak RSS |
+| --- | --- | --- |
+| 2 | 9m38s | 3.26 GB |
+| 4 | 9m36s | 3.43 GB |
+| 8 | 10m23s | 3.18 GB |
+
+No benefit: 4 ≈ 2 and 8 is slower. The page-render phase itself barely moves
+(9m27s vs 9m24s at 2 vs 4), consistent with the work being CPU-bound inside a
+single V8 isolate. Output is unaffected: raw HTML md5s differ between any two
+runs (~300/907 pages) because of the render-order-dependent
+`data-preact-island-id` counter, but after normalizing island ids, hashed asset
+names, and inline-script contents, the conc-2 and conc-8 dists are 907/907
+identical. Caveat: measured on a noisy laptop (~2 GB free RAM); treat the
+ordering, not the absolute times, as the result.
+
+### Default heap: the build does not survive without NODE_OPTIONS
+
+Reference-only build at concurrency 4 with no `NODE_OPTIONS`: crashes after
+~3 min with `FATAL ERROR: Ineffective mark-compacts near heap limit Allocation
+failed - JavaScript heap out of memory` (RSS ~3.1 GB at death; default heap cap
+is ~2 GB on this Node 24). The existing `deploy.yml` sets no heap flag either,
+so any CI job running this build must export
+`NODE_OPTIONS=--max-old-space-size=4096`. Log: `.poc/heap-default.log`.
+
+### Upstream finding: `SKIP_BUILD_COMPRESS` is a dead flag on main
+
+`astro.config.mjs` computes `shouldSkipCompress` and logs "WILL SKIP COMPRESS
+BUILD STEP", but the value is never used: the `fast()` compression integration
+(`src/scripts/fast-compress.ts`) runs unconditionally. All timings in this
+document therefore include compression, consistently. Candidate third fix PR
+(not branched here; the brief covered two).
+
+### Fix branches (ready; no PRs opened)
+
+**`fix/node-fs-import`** (one commit, `c7475f1f1`): `src/pages/_utils-node.ts`
+imported `"fs"`/`"fs/promises"` bare, which Vite's `commonjs--resolver` fails to
+resolve during `astro build` on a clean main (`Failed to resolve entry for
+package "fs"`); the branch switches them to the `node:fs`/`node:fs/promises`
+specifiers. Verified: full `astro build` on this branch exits 0 and builds all
+6,371 pages (20m25s on the laptop; clean main does not build at all).
+
+**`fix/settings-jump-to-prop`** (one commit, `bb2a1c645`): `Settings/index.astro`
+read the mutable global `jumpToState` from `src/globals/state.ts`, which only
+`AboutLayout` ever set, so whether a page's Settings aside got the `noJumpTo`
+class depended on what happened to render earlier in the same build —
+nondeterministic under `build.concurrency: 2` and divergent between full and
+reference-only builds. The branch passes `jumpToState` down as a prop instead
+(`AboutLayout` → `BaseLayout` → `Settings`), matching how Nav already receives
+it, and leaves the now-unused global in place for a minimal diff. Verified with
+the fix cherry-picked onto the PoC branch: reference pages with `noJumpTo` are
+0/907 in a reference-only build and 0/1,664 in a full build (previously 907/907
+vs a render-order-dependent subset), i.e. the two build modes now agree;
+remaining `noJumpTo` pages in the full build (391/6,371) are the non-About,
+non-reference pages that genuinely render without a jump-to menu. Note: the
+verification full-builds also carried the `node:fs` fix, since main cannot
+build without it.
+
+### CI runner timing (pending)
+
+A throwaway `workflow_dispatch` workflow
+(`.github/workflows/poc-reference-preview.yml`, to be deleted from the branch
+after the numbers are recorded) is committed on the PoC branch. Dispatching it
+requires the file to exist on the fork's default branch, which needs a manual
+step by the repo owner; results will be recorded here once the run completes.
