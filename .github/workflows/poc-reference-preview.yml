@@ -5,7 +5,8 @@
 name: poc-reference-preview
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [poc/reference-only-build]
 
 jobs:
   reference-preview:
