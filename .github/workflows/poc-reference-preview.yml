@@ -1,0 +1,63 @@
+# Throwaway PoC workflow (p5.js#9303) — reference-only preview build timing on a
+# real runner. workflow_dispatch only; must be deleted from the branch after the
+# numbers are recorded. Actions pinned by version tag, matching this repo's
+# existing workflows (test.yml / deploy.yml pin by tag, not SHA).
+name: poc-reference-preview
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reference-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Runner info
+        run: |
+          nproc
+          free -h
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Node version
+        run: node --version
+      - name: npm ci (website)
+        run: npm ci
+      - name: Generate data.json (p5.js v2.3.3 clone + install + docs)
+        run: |
+          git clone --depth 1 --filter=blob:none --branch v2.3.3 \
+            https://github.com/processing/p5.js.git "$RUNNER_TEMP/p5"
+          cd "$RUNNER_TEMP/p5"
+          npm install
+          npm run docs
+          ls -la docs/reference/data.json
+      - name: build:reference from pre-built data.json
+        env:
+          P5_DATA_JSON_PATH: ${{ runner.temp }}/p5/docs/reference/data.json
+        run: npm run build:reference
+      - name: build:reference-only (4GB heap)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          ASTRO_BUILD_CONCURRENCY: 4
+          REFERENCE_SKIP_LOWERCASE: 1
+          SKIP_BUILD_COMPRESS: 1
+        run: npm run build:reference-only
+      - name: build:reference-only (default heap)
+        env:
+          ASTRO_BUILD_CONCURRENCY: 4
+          REFERENCE_SKIP_LOWERCASE: 1
+          SKIP_BUILD_COMPRESS: 1
+        run: |
+          rm -rf dist
+          npm run build:reference-only
+      - name: dist size
+        run: |
+          du -sh dist
+          find dist -name '*.html' | wc -l
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-only-dist
+          path: dist/
